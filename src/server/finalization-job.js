@@ -106,36 +106,40 @@ class FinalizationJob {
         // Calculate total deposits (all players who joined)
         const totalDeposits = lobby.balances.size * config.blockchain.depositAmount;
 
-        // Apply 5% fee to positive balances
+        // Calculate fee and payouts
+        // The contract expects: feeAmount ≈ (totalPayout * feeBps) / 10000
+        // To ensure totalPayout + feeAmount = totalDeposits, we use:
+        // totalPayout = totalDeposits * 10000 / (10000 + feeBps)
+        // feeAmount = totalDeposits - totalPayout
         const feeBps = config.blockchain.feeBps;
-        let totalPayout = 0;
-        let totalFee = 0;
-
+        
+        // Calculate total payout (all active players' balances)
+        const activeTotalBalance = finalBalances.reduce((sum, b) => sum + b.amount, 0);
+        
+        // Calculate the scaling factor to apply fee correctly
+        // If activeTotalBalance == totalDeposits, then apply fee normally
+        // If activeTotalBalance < totalDeposits (dead money exists), handle it
+        const totalPayout = Math.floor((activeTotalBalance * 10000) / (10000 + feeBps));
+        const totalFee = totalDeposits - totalPayout;
+        
+        // Now distribute the totalPayout proportionally among active players
         const balancesWithFee = finalBalances.map(balance => {
-            if (balance.amount > 0) {
-                const fee = Math.floor((balance.amount * feeBps) / 10000);
-                const payout = balance.amount - fee;
-                totalPayout += payout;
-                totalFee += fee;
+            if (balance.amount > 0 && activeTotalBalance > 0) {
+                // Calculate this player's share of the total payout
+                const playerShare = Math.floor((balance.amount * totalPayout) / activeTotalBalance);
                 return {
                     address: balance.address,
-                    amount: payout // Amount after fee
+                    amount: playerShare
                 };
             } else {
-                return balance;
+                return {
+                    address: balance.address,
+                    amount: 0
+                };
             }
         });
 
-        // Calculate dead money (unclaimed funds from PvE deaths, disconnects, etc.)
-        // This ensures: totalPayout + totalFee + deadMoney == totalDeposits
-        const activePlayerPayouts = balancesWithFee.reduce((sum, b) => sum + b.amount, 0);
-        const deadMoney = totalDeposits - activePlayerPayouts - totalFee;
-        
-        // Add dead money to fee (house takes it)
-        if (deadMoney > 0) {
-            totalFee += deadMoney;
-            console.log(`[FinalizationJob] Dead money added to fee: ${deadMoney} (total deposits: ${totalDeposits}, active payouts: ${activePlayerPayouts})`);
-        }
+        console.log(`[FinalizationJob] Fee calculation: activeTotalBalance=${activeTotalBalance}, totalPayout=${totalPayout}, totalFee=${totalFee}`);
 
         // Prepare distribution lists
         const recipients = [];
