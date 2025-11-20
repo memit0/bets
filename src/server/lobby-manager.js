@@ -412,6 +412,31 @@ class LobbyManager {
     }
 
     /**
+     * Remove all players in a lobby from the game map
+     * Force disconnects players when lobby ends
+     * @param {number} lobbyId - Lobby ID
+     * @param {Object} io - Socket.IO instance
+     */
+    despawnLobbyPlayers(lobbyId, io) {
+        const lobby = this.getLobby(lobbyId);
+        if (!lobby || !lobby.players) return;
+
+        for (const [socketId, playerState] of lobby.players.entries()) {
+            // 1. Notify Client Game is Over
+            if (io && io.sockets.sockets.get(socketId)) {
+                io.to(socketId).emit('kick', 'Lobby Ended! Distributing Rewards...');
+                io.to(socketId).disconnect(true);
+            }
+
+            // 2. Remove from internal maps (Logic handled by disconnect handler usually, 
+            // but we force it here to be sure)
+            this.removePlayer(socketId, null, lobbyId);
+        }
+        
+        console.log(`[Lobby] Despawned all players from Lobby ${lobbyId}`);
+    }
+
+    /**
      * Clean up old lobbies (older than 1 hour)
      */
     cleanupOldLobbies() {

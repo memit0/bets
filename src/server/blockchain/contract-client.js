@@ -5,10 +5,11 @@ const config = require('../../../config');
 
 // BetLobby ABI (minimal interface for what we need)
 const BET_LOBBY_ABI = [
-    "function finalizeLobby(uint256 lobbyId, bytes32 root, uint96 totalPayout, uint96 feeAmount) external",
+    "function distributeRewards(uint256 lobbyId, address[] recipients, uint96[] amounts, uint96 totalPayout, uint96 feeAmount) external",
     "event LobbyJoined(uint256 indexed lobbyId, address indexed player)",
     "event LobbyActivated(uint256 indexed lobbyId, uint64 startTime, uint64 endTime)",
-    "event LobbyFinalized(uint256 indexed lobbyId, bytes32 merkleRoot, uint96 totalPayout, uint96 feeAmount)"
+    "event LobbyFinalized(uint256 indexed lobbyId, uint96 totalPayout, uint96 feeAmount)",
+    "event RewardDistributed(uint256 indexed lobbyId, address indexed player, uint96 amount)"
 ];
 
 class ContractClient {
@@ -33,15 +34,16 @@ class ContractClient {
     }
 
     /**
-     * Finalize a lobby by submitting Merkle root to contract
+     * Distribute rewards to players directly
      * @param {number} lobbyId - The lobby ID
-     * @param {string} merkleRoot - The Merkle root (0x-prefixed hex string)
-     * @param {number} totalPayout - Total payout amount in USDC (6 decimals)
-     * @param {number} feeAmount - Fee amount in USDC (6 decimals)
+     * @param {string[]} recipients - Array of player addresses
+     * @param {number[]} amounts - Array of amounts in USDC
+     * @param {number} totalPayout - Total payout amount in USDC
+     * @param {number} feeAmount - Fee amount in USDC
      * @param {number} maxRetries - Maximum retry attempts
      * @returns {Promise<Object>} Transaction receipt
      */
-    async finalizeLobby(lobbyId, merkleRoot, totalPayout, feeAmount, maxRetries = 3) {
+    async distributeRewards(lobbyId, recipients, amounts, totalPayout, feeAmount, maxRetries = 3) {
         if (!this.contract) {
             throw new Error('Contract address not configured');
         }
@@ -49,12 +51,13 @@ class ContractClient {
         let lastError;
         for (let attempt = 0; attempt < maxRetries; attempt++) {
             try {
-                console.log(`[Blockchain] Finalizing lobby ${lobbyId} (attempt ${attempt + 1}/${maxRetries})`);
-                console.log(`[Blockchain] Root: ${merkleRoot}, Payout: ${totalPayout}, Fee: ${feeAmount}`);
+                console.log(`[Blockchain] Distributing rewards for lobby ${lobbyId} (attempt ${attempt + 1}/${maxRetries})`);
+                console.log(`[Blockchain] Recipients: ${recipients.length}, Payout: ${totalPayout}, Fee: ${feeAmount}`);
 
-                const tx = await this.contract.finalizeLobby(
+                const tx = await this.contract.distributeRewards(
                     lobbyId,
-                    merkleRoot,
+                    recipients,
+                    amounts,
                     totalPayout,
                     feeAmount
                 );
@@ -71,7 +74,7 @@ class ContractClient {
                 };
             } catch (error) {
                 lastError = error;
-                console.error(`[Blockchain] Finalization attempt ${attempt + 1} failed:`, error.message);
+                console.error(`[Blockchain] Distribution attempt ${attempt + 1} failed:`, error.message);
 
                 // Exponential backoff: wait 2^attempt seconds
                 if (attempt < maxRetries - 1) {
@@ -82,7 +85,7 @@ class ContractClient {
             }
         }
 
-        throw new Error(`Failed to finalize lobby after ${maxRetries} attempts: ${lastError.message}`);
+        throw new Error(`Failed to distribute rewards after ${maxRetries} attempts: ${lastError.message}`);
     }
 
     /**

@@ -2,19 +2,19 @@
 
 const config = require('../../config');
 const ContractClient = require('./blockchain/contract-client');
-const MerkleBuilder = require('./blockchain/merkle-builder');
+// const MerkleBuilder = require('./blockchain/merkle-builder'); // Removed
 const LobbyStore = require('./repositories/lobby-store');
 
 /**
  * Finalization Job
- * Periodically checks for lobbies ready to finalize and submits Merkle roots to contract
+ * Periodically checks for lobbies ready to finalize and distributes rewards
  */
 class FinalizationJob {
     constructor(lobbyManager, io = null) {
         this.lobbyManager = lobbyManager;
         this.io = io; // Socket.IO instance for broadcasting
         this.contractClient = null;
-        this.merkleBuilder = new MerkleBuilder();
+        // this.merkleBuilder = new MerkleBuilder(); // Removed
         this.lobbyStore = new LobbyStore();
         this.isRunning = false;
         this.intervalId = null;
@@ -93,12 +93,18 @@ class FinalizationJob {
 
         console.log(`[FinalizationJob] Finalizing lobby ${lobbyId}`);
 
+        // Force despawn all players in this lobby (ends gameplay)
+        this.lobbyManager.despawnLobbyPlayers(lobbyId, this.io);
+
         // Mark as finalizable
         this.lobbyManager.markFinalizable(lobbyId);
 
         // Get final balances
         const finalBalances = this.lobbyManager.getFinalBalances(lobbyId);
         console.log(`[FinalizationJob] Final balances for lobby ${lobbyId}:`, finalBalances);
+
+        // Calculate total deposits (all players who joined)
+        const totalDeposits = lobby.balances.size * config.blockchain.depositAmount;
 
         // Apply 5% fee to positive balances
         const feeBps = config.blockchain.feeBps;
@@ -120,18 +126,35 @@ class FinalizationJob {
             }
         });
 
-        // Build Merkle tree
-        const merkleData = this.merkleBuilder.buildTree(balancesWithFee);
-        console.log(`[FinalizationJob] Merkle root for lobby ${lobbyId}: ${merkleData.root}`);
+        // Calculate dead money (unclaimed funds from PvE deaths, disconnects, etc.)
+        // This ensures: totalPayout + totalFee + deadMoney == totalDeposits
+        const activePlayerPayouts = balancesWithFee.reduce((sum, b) => sum + b.amount, 0);
+        const deadMoney = totalDeposits - activePlayerPayouts - totalFee;
+        
+        // Add dead money to fee (house takes it)
+        if (deadMoney > 0) {
+            totalFee += deadMoney;
+            console.log(`[FinalizationJob] Dead money added to fee: ${deadMoney} (total deposits: ${totalDeposits}, active payouts: ${activePlayerPayouts})`);
+        }
+
+        // Prepare distribution lists
+        const recipients = [];
+        const amounts = [];
+        
+        balancesWithFee.forEach(balance => {
+            recipients.push(balance.address);
+            amounts.push(balance.amount);
+        });
+
+        console.log(`[FinalizationJob] Distributing rewards for lobby ${lobbyId}`);
 
         // Save to disk
         const lobbySnapshot = {
             lobbyId,
             finalizedAt: Date.now(),
             finalBalances: balancesWithFee,
-            merkleRoot: merkleData.root,
-            leaves: merkleData.leaves,
-            proofs: merkleData.proofs,
+            recipients,
+            amounts,
             totalPayout,
             totalFee
         };
@@ -141,14 +164,15 @@ class FinalizationJob {
         // Submit to contract if client is available
         if (this.contractClient) {
             try {
-                const result = await this.contractClient.finalizeLobby(
+                const result = await this.contractClient.distributeRewards(
                     lobbyId,
-                    merkleData.root,
+                    recipients,
+                    amounts,
                     totalPayout,
                     totalFee
                 );
 
-                console.log(`[FinalizationJob] Successfully finalized lobby ${lobbyId} on-chain: ${result.txHash}`);
+                console.log(`[FinalizationJob] Successfully distributed rewards for lobby ${lobbyId} on-chain: ${result.txHash}`);
 
                 // Mark as finalized
                 this.lobbyManager.markFinalized(lobbyId);
@@ -164,13 +188,13 @@ class FinalizationJob {
                         this.io.to(socketId).emit('lobbyFinalized', {
                             lobbyId,
                             balance: playerState.balance,
-                            merkleRoot: merkleData.root
+                            txHash: result.txHash
                         });
                     }
                 }
 
             } catch (error) {
-                console.error(`[FinalizationJob] Failed to finalize lobby ${lobbyId} on-chain:`, error);
+                console.error(`[FinalizationJob] Failed to distribute rewards for lobby ${lobbyId} on-chain:`, error);
                 // Don't mark as finalized if contract call failed
                 // Job will retry on next check
                 throw error;

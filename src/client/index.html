@@ -53,7 +53,17 @@
             <input type="text" tabindex="0" autofocus placeholder="Enter your name here" id="playerNameInput" maxlength="25" />
             <b class="input-error">Nick must be alphanumeric characters only!</b>
             <br />
-            <a onclick="document.getElementById('spawn_cell').play();"><button id="startButton">Play</button></a>
+            
+            <!-- Wallet Controls in Start Menu -->
+            <div id="startMenuWallet">
+                <div id="menuWalletStatus">Not connected</div>
+                <button id="menuConnectBtn">Connect Wallet</button>
+                <button id="menuApproveBtn" style="display: none;">Approve 1 USDC</button>
+                <button id="menuJoinBtn" style="display: none;">Join Lobby (1 USDC)</button>
+                <div id="menuWalletError" class="input-error" style="opacity: 1; display: none;"></div>
+            </div>
+
+            <a onclick="document.getElementById('spawn_cell').play();"><button id="startButton" disabled>Play (Deposit Required)</button></a>
             <button id="spectateButton">Spectate</button>
             <button id="settingsButton">Settings</button>
             <br />
@@ -82,8 +92,6 @@
     </div>
     <!-- JS -->
     <script src="//code.jquery.com/jquery-2.2.0.min.js"></script>
-    <script src="https://cdn.ethers.io/lib/ethers-5.7.2.umd.min.js"></script>
-    <script src="js/wallet.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>

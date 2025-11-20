@@ -4,6 +4,7 @@
 // Uses ethers.js via window.ethereum provider
 
 const BASE_SEPOLIA_CHAIN_ID = 84532; // Base Sepolia testnet
+const { ethers } = require('ethers');
 
 class WalletManager {
     constructor() {

@@ -28,4 +28,12 @@ module.exports = {
     toggleMassState: 0,
     backgroundColor: '#f2fbff',
     lineColor: '#000000',
+    depositConfirmed: false,
+    depositAddress: null,
+    depositTxHash: null,
+    depositLobbyId: null,
+    // Lobby state
+    lobbyStartTime: null,
+    lobbyEndTime: null,
+    playerBalance: 0,
 };

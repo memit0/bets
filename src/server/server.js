@@ -504,7 +504,22 @@ const gameloop = () => {
 const sendUpdates = () => {
     spectators.forEach(updateSpectator);
     map.enumerateWhatPlayersSee(function (playerData, visiblePlayers, visibleFood, visibleMass, visibleViruses) {
-        sockets[playerData.id].emit('serverTellPlayerMove', playerData, visiblePlayers, visibleFood, visibleMass, visibleViruses);
+        // Get current player's lobby ID
+        const currentPlayerLobbyId = lobbyManager.playerLobbies.get(playerData.id) || null;
+        
+        // Add lobby ID to current player data
+        playerData.lobbyId = currentPlayerLobbyId;
+        
+        // Add lobby IDs to visible players
+        const visiblePlayersWithLobby = visiblePlayers.map(player => {
+            const playerLobbyId = lobbyManager.playerLobbies.get(player.id) || null;
+            return {
+                ...player,
+                lobbyId: playerLobbyId
+            };
+        });
+        
+        sockets[playerData.id].emit('serverTellPlayerMove', playerData, visiblePlayersWithLobby, visibleFood, visibleMass, visibleViruses);
         if (leaderboardChanged) {
             sendLeaderboard(sockets[playerData.id]);
         }

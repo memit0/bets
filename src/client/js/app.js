@@ -1,8 +1,10 @@
 var io = require('socket.io-client');
+var { ethers } = require('ethers');
 var render = require('./render');
 var ChatClient = require('./chat-client');
 var Canvas = require('./canvas');
 var global = require('./global');
+require('./wallet'); // Import wallet to bundle it and initialize window.walletManager
 
 var playerNameInput = document.getElementById('playerNameInput');
 var socket;
@@ -29,6 +31,13 @@ function startGame(type) {
     if (!socket) {
         socket = io({ query: "type=" + type });
         setupSocket(socket);
+    }
+    if (global.depositConfirmed && global.depositAddress) {
+        socket.emit('playerDepositConfirmed', {
+            address: global.depositAddress,
+            txHash: global.depositTxHash,
+            lobbyId: global.depositLobbyId
+        });
     }
     if (!global.animLoopHandle)
         animloop();
@@ -57,6 +66,10 @@ window.onload = function () {
     };
 
     btn.onclick = function () {
+        if (!global.depositConfirmed) {
+            alert('Please join a lobby first by depositing 1 USDC.');
+            return;
+        }
 
         // Checks if the nick is valid.
         if (validNick()) {
@@ -82,6 +95,10 @@ window.onload = function () {
         var key = e.which || e.keyCode;
 
         if (key === global.KEY_ENTER) {
+            if (!global.depositConfirmed) {
+                alert('Please join a lobby first by depositing 1 USDC.');
+                return;
+            }
             if (validNick()) {
                 nickErrorText.style.opacity = 0;
                 startGame('player');
@@ -128,8 +145,8 @@ var USDC_ABI = [
 // BetLobby ABI (minimal)
 var BET_LOBBY_ABI = [
     "function joinLobby(uint256 lobbyId) external",
-    "function claim(uint256 lobbyId, address player, uint96 amount, bytes32[] proof) external",
-    "event LobbyFinalized(uint256 indexed lobbyId, bytes32 merkleRoot, uint96 totalPayout)"
+    "function hasDeposited(uint256 lobbyId, address player) external view returns (bool)",
+    "event LobbyFinalized(uint256 indexed lobbyId, uint96 totalPayout, uint96 feeAmount)"
 ];
 
 function initWalletUI() {
@@ -140,9 +157,18 @@ function initWalletUI() {
     var walletAddress = document.getElementById('walletAddress');
     var walletError = document.getElementById('walletError');
 
+    // Start menu wallet buttons
+    var menuConnectBtn = document.getElementById('menuConnectBtn');
+    var menuApproveBtn = document.getElementById('menuApproveBtn');
+    var menuJoinBtn = document.getElementById('menuJoinBtn');
+    var menuWalletStatus = document.getElementById('menuWalletStatus');
+    var menuWalletError = document.getElementById('menuWalletError');
+    var startButton = document.getElementById('startButton');
+
     // Check if wallet is available
     if (!window.walletManager || !window.walletManager.isWalletAvailable()) {
-        walletStatus.textContent = 'No wallet detected';
+        if (walletStatus) walletStatus.textContent = 'No wallet detected';
+        if (menuWalletStatus) menuWalletStatus.textContent = 'No wallet detected';
         return;
     }
 
@@ -150,6 +176,7 @@ function initWalletUI() {
     connectBtn.onclick = async function() {
         try {
             walletError.style.display = 'none';
+            
             var address = await window.walletManager.connectWallet();
             
             // Switch to Base Sepolia
@@ -164,6 +191,9 @@ function initWalletUI() {
             
             // Check USDC allowance
             await checkAllowance();
+            
+            // Check if already deposited
+            await checkDepositStatus();
         } catch (error) {
             walletError.textContent = error.message;
             walletError.style.display = 'block';
@@ -222,6 +252,10 @@ function initWalletUI() {
             
             joinBtn.textContent = 'Joined!';
             walletStatus.textContent = 'Deposit confirmed';
+            global.depositConfirmed = true; // Enable play button
+            global.depositAddress = await signer.getAddress();
+            global.depositTxHash = receipt.transactionHash;
+            global.depositLobbyId = currentLobbyId;
             
             // Emit to server
             if (socket) {
@@ -238,6 +272,126 @@ function initWalletUI() {
             joinBtn.textContent = 'Join Lobby (1 USDC)';
         }
     };
+
+    // START MENU WALLET BUTTONS
+    if (menuConnectBtn) {
+        menuConnectBtn.onclick = async function() {
+            try {
+                if (menuWalletError) menuWalletError.style.display = 'none';
+                menuConnectBtn.disabled = true;
+                menuConnectBtn.textContent = 'Connecting...';
+                
+                var address = await window.walletManager.connectWallet();
+                
+                // Switch to Base Sepolia
+                if (!window.walletManager.isOnCorrectNetwork()) {
+                    await window.walletManager.switchToBaseSepolia();
+                }
+
+                if (menuWalletStatus) {
+                    menuWalletStatus.textContent = 'Connected: ' + address.substring(0, 6) + '...' + address.substring(38);
+                }
+                menuConnectBtn.style.display = 'none';
+                
+                // Check USDC allowance
+                await checkAllowanceMenu();
+                
+                // Check if already deposited
+                await checkDepositStatus();
+            } catch (error) {
+                if (menuWalletError) {
+                    menuWalletError.textContent = error.message;
+                    menuWalletError.style.display = 'block';
+                }
+                menuConnectBtn.disabled = false;
+                menuConnectBtn.textContent = 'Connect Wallet';
+            }
+        };
+    }
+
+    if (menuApproveBtn) {
+        menuApproveBtn.onclick = async function() {
+            try {
+                if (menuWalletError) menuWalletError.style.display = 'none';
+                menuApproveBtn.disabled = true;
+                menuApproveBtn.textContent = 'Approving...';
+                
+                if (!usdcAddress) {
+                    throw new Error('USDC address not configured');
+                }
+                
+                var signer = await window.walletManager.getSigner();
+                var usdcContract = new ethers.Contract(usdcAddress, USDC_ABI, signer);
+                
+                // Approve 1 USDC
+                var tx = await usdcContract.approve(betLobbyAddress, depositAmount);
+                await tx.wait();
+                
+                menuApproveBtn.textContent = 'Approved ✓';
+                await checkAllowanceMenu();
+            } catch (error) {
+                if (menuWalletError) {
+                    menuWalletError.textContent = error.message;
+                    menuWalletError.style.display = 'block';
+                }
+                menuApproveBtn.disabled = false;
+                menuApproveBtn.textContent = 'Approve 1 USDC';
+            }
+        };
+    }
+
+    if (menuJoinBtn) {
+        menuJoinBtn.onclick = async function() {
+            try {
+                if (menuWalletError) menuWalletError.style.display = 'none';
+                menuJoinBtn.disabled = true;
+                menuJoinBtn.textContent = 'Joining...';
+                
+                if (!betLobbyAddress) {
+                    throw new Error('BetLobby address not configured');
+                }
+                
+                // Get current lobby ID (deterministic)
+                var lobbyDurationMs = 300000; // 5 minutes
+                currentLobbyId = Math.floor(Date.now() / lobbyDurationMs);
+                
+                var signer = await window.walletManager.getSigner();
+                var betLobbyContract = new ethers.Contract(betLobbyAddress, BET_LOBBY_ABI, signer);
+                
+                // Join lobby
+                var tx = await betLobbyContract.joinLobby(currentLobbyId);
+                var receipt = await tx.wait();
+                
+                menuJoinBtn.style.display = 'none';
+                if (menuWalletStatus) menuWalletStatus.textContent = 'Deposit Confirmed ✓';
+                if (startButton) {
+                    startButton.disabled = false;
+                    startButton.textContent = 'Play';
+                }
+                
+                global.depositConfirmed = true;
+                global.depositAddress = await signer.getAddress();
+                global.depositTxHash = receipt.transactionHash;
+                global.depositLobbyId = currentLobbyId;
+                
+                // Emit to server
+                if (socket) {
+                    socket.emit('playerDepositConfirmed', {
+                        address: await signer.getAddress(),
+                        txHash: receipt.transactionHash,
+                        lobbyId: currentLobbyId
+                    });
+                }
+            } catch (error) {
+                if (menuWalletError) {
+                    menuWalletError.textContent = error.message;
+                    menuWalletError.style.display = 'block';
+                }
+                menuJoinBtn.disabled = false;
+                menuJoinBtn.textContent = 'Join Lobby (1 USDC)';
+            }
+        };
+    }
 }
 
 async function checkAllowance() {
@@ -271,6 +425,83 @@ async function checkAllowance() {
         }
     } catch (error) {
         console.error('[Wallet] Error checking allowance:', error);
+    }
+}
+
+async function checkAllowanceMenu() {
+    try {
+        if (!window.walletManager || !window.walletManager.isConnected) {
+            return;
+        }
+        
+        if (!usdcAddress || !betLobbyAddress) {
+            return;
+        }
+        
+        var provider = window.walletManager.getProvider();
+        var signer = await window.walletManager.getSigner();
+        var address = await signer.getAddress();
+        var usdcContract = new ethers.Contract(usdcAddress, USDC_ABI, provider);
+        
+        var allowance = await usdcContract.allowance(address, betLobbyAddress);
+        
+        var menuApproveBtn = document.getElementById('menuApproveBtn');
+        var menuJoinBtn = document.getElementById('menuJoinBtn');
+        
+        if (allowance.lt(depositAmount)) {
+            if (menuApproveBtn) menuApproveBtn.style.display = 'block';
+            if (menuJoinBtn) menuJoinBtn.style.display = 'none';
+        } else {
+            if (menuApproveBtn) menuApproveBtn.style.display = 'none';
+            if (menuJoinBtn) menuJoinBtn.style.display = 'block';
+        }
+    } catch (error) {
+        console.error('[Wallet] Error checking allowance (menu):', error);
+    }
+}
+
+async function checkDepositStatus() {
+    try {
+        if (!window.walletManager || !window.walletManager.isConnected) return;
+        if (!betLobbyAddress) return;
+
+        var lobbyDurationMs = 300000; // 5 minutes
+        var currentLobbyId = Math.floor(Date.now() / lobbyDurationMs);
+
+        var signer = await window.walletManager.getSigner();
+        var address = await signer.getAddress();
+        var betLobbyContract = new ethers.Contract(betLobbyAddress, BET_LOBBY_ABI, signer);
+
+        var deposited = await betLobbyContract.hasDeposited(currentLobbyId, address);
+        
+        if (deposited) {
+            var menuJoinBtn = document.getElementById('menuJoinBtn');
+            var menuWalletStatus = document.getElementById('menuWalletStatus');
+            var startButton = document.getElementById('startButton');
+            
+            if (menuJoinBtn) menuJoinBtn.style.display = 'none';
+            if (menuWalletStatus) menuWalletStatus.textContent = 'Deposit Confirmed ✓';
+            if (startButton) {
+                startButton.disabled = false;
+                startButton.textContent = 'Play';
+            }
+            
+            global.depositConfirmed = true;
+            global.depositAddress = address;
+            global.depositTxHash = 'reconnect';
+            global.depositLobbyId = currentLobbyId;
+            
+            // Emit to server to reconnect socket/player session
+            if (socket) {
+                socket.emit('playerDepositConfirmed', {
+                    address: address,
+                    txHash: 'reconnect', // Special flag or just ignore on server side if validation passes
+                    lobbyId: currentLobbyId
+                });
+            }
+        }
+    } catch (error) {
+        console.error('[Wallet] Error checking deposit status:', error);
     }
 }
 
@@ -432,6 +663,8 @@ function setupSocket(socket) {
             player.hue = playerData.hue;
             player.massTotal = playerData.massTotal;
             player.cells = playerData.cells;
+            // Store lobby ID for ghost mode rendering
+            global.player.lobbyId = playerData.lobbyId || null;
         }
         users = userData;
         foods = foodsList;
@@ -468,11 +701,20 @@ function setupSocket(socket) {
     // Lobby events
     socket.on('lobbyEndTime', function (data) {
         global.lobbyEndTime = data.endTime;
+        global.lobbyStartTime = Date.now(); // Track start time for cash-out grace period
         // Start countdown timer
         if (global.lobbyEndTime) {
             updateLobbyTimer();
             setInterval(updateLobbyTimer, 1000);
         }
+        
+        // Enable cash-out button after grace period (45 seconds)
+        setTimeout(() => {
+            var cashOutBtn = document.getElementById('cashOutBtn');
+            if (cashOutBtn) {
+                cashOutBtn.disabled = false;
+            }
+        }, 45000); // 45 seconds
     });
 
     socket.on('lobbyFinalized', function (data) {
@@ -538,48 +780,17 @@ function showResultsModal(data) {
 
     modal.style.display = 'block';
 
-    claimBtn.onclick = async function() {
-        try {
-            claimBtn.disabled = true;
-            claimStatus.textContent = 'Fetching proof...';
-            
-            if (!window.walletManager || !window.walletManager.isConnected) {
-                throw new Error('Wallet not connected');
-            }
-
-            var address = await (await window.walletManager.getSigner()).getAddress();
-            var lobbyId = currentLobbyId || data.lobbyId;
-            
-            // Fetch Merkle proof
-            var response = await fetch('/lobbies/' + lobbyId + '/claims/' + address);
-            if (!response.ok) {
-                throw new Error('Failed to fetch claim data');
-            }
-            
-            var claimData = await response.json();
-            claimStatus.textContent = 'Submitting claim...';
-            
-            // Call claim function
-            var signer = await window.walletManager.getSigner();
-            var betLobbyContract = new ethers.Contract(betLobbyAddress, BET_LOBBY_ABI, signer);
-            
-            var tx = await betLobbyContract.claim(
-                lobbyId,
-                address,
-                claimData.amount,
-                claimData.proof
-            );
-            
-            claimStatus.textContent = 'Transaction pending...';
-            var receipt = await tx.wait();
-            
-            claimStatus.textContent = 'Claim successful! Tx: ' + receipt.transactionHash.substring(0, 10) + '...';
-            claimBtn.style.display = 'none';
-        } catch (error) {
-            claimStatus.textContent = 'Error: ' + error.message;
-            claimBtn.disabled = false;
+    // Hide claim button as distribution is automatic
+    if (claimBtn) {
+        claimBtn.style.display = 'none';
+    }
+    
+    if (claimStatus) {
+        claimStatus.textContent = 'Rewards have been automatically distributed to your wallet.';
+        if (data.txHash) {
+            claimStatus.textContent += ' Tx: ' + data.txHash.substring(0, 10) + '...';
         }
-    };
+    }
 
     closeBtn.onclick = function() {
         modal.style.display = 'none';
@@ -657,14 +868,15 @@ function gameLoop() {
                     name: users[i].name,
                     radius: users[i].cells[j].radius,
                     x: users[i].cells[j].x - player.x + global.screen.width / 2,
-                    y: users[i].cells[j].y - player.y + global.screen.height / 2
+                    y: users[i].cells[j].y - player.y + global.screen.height / 2,
+                    lobbyId: users[i].lobbyId || null // Include lobby ID for ghost mode
                 });
             }
         }
         cellsToDraw.sort(function (obj1, obj2) {
             return obj1.mass - obj2.mass;
         });
-        render.drawCells(cellsToDraw, playerConfig, global.toggleMassState, borders, graph);
+        render.drawCells(cellsToDraw, playerConfig, global.toggleMassState, borders, graph, global.player.lobbyId);
 
         socket.emit('0', window.canvas.target); // playerSendTarget "Heartbeat".
     }

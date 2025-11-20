@@ -6,7 +6,6 @@ import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 /**
  * @title BetLobby
@@ -38,20 +37,18 @@ contract BetLobby is Ownable, Pausable, ReentrancyGuard {
         uint64 endTime;
         uint64 finalizeDeadline;
         LobbyState state;
-        bytes32 merkleRoot;
         uint96 totalDeposits;
-        uint96 totalClaimed;
+        uint96 totalDistributed;
     }
 
     mapping(uint256 => Lobby) public lobbies;
-    mapping(uint256 => mapping(address => bool)) public claimed;
     mapping(uint256 => mapping(address => bool)) public hasDeposited; // Track depositors for timeout refund
 
     // Events
     event LobbyJoined(uint256 indexed lobbyId, address indexed player);
     event LobbyActivated(uint256 indexed lobbyId, uint64 startTime, uint64 endTime);
-    event LobbyFinalized(uint256 indexed lobbyId, bytes32 merkleRoot, uint96 totalPayout, uint96 feeAmount);
-    event Claimed(uint256 indexed lobbyId, address indexed player, uint96 amount);
+    event LobbyFinalized(uint256 indexed lobbyId, uint96 totalPayout, uint96 feeAmount);
+    event RewardDistributed(uint256 indexed lobbyId, address indexed player, uint96 amount);
     event TimeoutRefund(uint256 indexed lobbyId, address indexed player);
 
     constructor(
@@ -92,9 +89,8 @@ contract BetLobby is Ownable, Pausable, ReentrancyGuard {
                 endTime: endTime,
                 finalizeDeadline: finalizeDeadline,
                 state: LobbyState.Active,
-                merkleRoot: bytes32(0),
                 totalDeposits: uint96(DEPOSIT_AMOUNT),
-                totalClaimed: 0
+                totalDistributed: 0
             });
             
             emit LobbyActivated(lobbyId, startTime, endTime);
@@ -107,17 +103,20 @@ contract BetLobby is Ownable, Pausable, ReentrancyGuard {
     }
 
     /**
-     * @dev Finalize lobby by setting Merkle root (operator only)
+     * @dev Distribute rewards to players (operator only)
+     * Replaces Merkle claim system with direct distribution
      */
-    function finalizeLobby(
+    function distributeRewards(
         uint256 lobbyId,
-        bytes32 root,
+        address[] calldata recipients,
+        uint96[] calldata amounts,
         uint96 totalPayout,
         uint96 feeAmount
-    ) external {
+    ) external nonReentrant {
         require(msg.sender == operator, "Only operator");
         require(lobbies[lobbyId].state == LobbyState.Active, "Lobby not active");
         require(block.timestamp >= lobbies[lobbyId].endTime, "Lobby not ended");
+        require(recipients.length == amounts.length, "Length mismatch");
         
         // Verify fee calculation: feeAmount should be feeBps of totalPayout
         // totalPayout + feeAmount should equal totalDeposits
@@ -133,7 +132,6 @@ contract BetLobby is Ownable, Pausable, ReentrancyGuard {
             "Fee mismatch"
         );
         
-        lobbies[lobbyId].merkleRoot = root;
         lobbies[lobbyId].state = LobbyState.Finalized;
         
         // Transfer fee to fee recipient
@@ -141,36 +139,20 @@ contract BetLobby is Ownable, Pausable, ReentrancyGuard {
             token.safeTransfer(feeRecipient, feeAmount);
         }
         
-        emit LobbyFinalized(lobbyId, root, totalPayout, feeAmount);
-    }
+        // Distribute rewards
+        uint96 calculatedTotal = 0;
+        for (uint256 i = 0; i < recipients.length; i++) {
+            if (amounts[i] > 0) {
+                token.safeTransfer(recipients[i], amounts[i]);
+                emit RewardDistributed(lobbyId, recipients[i], amounts[i]);
+                calculatedTotal += amounts[i];
+            }
+        }
 
-    /**
-     * @dev Claim winnings using Merkle proof
-     */
-    function claim(
-        uint256 lobbyId,
-        address player,
-        uint96 amount,
-        bytes32[] calldata proof
-    ) external nonReentrant {
-        require(lobbies[lobbyId].state == LobbyState.Finalized, "Lobby not finalized");
-        require(!claimed[lobbyId][player], "Already claimed");
-        require(msg.sender == player, "Not your claim");
+        require(calculatedTotal == totalPayout, "Total payout mismatch");
+        lobbies[lobbyId].totalDistributed = calculatedTotal;
         
-        // Verify Merkle proof
-        bytes32 leaf = keccak256(abi.encode(player, amount));
-        require(
-            MerkleProof.verify(proof, lobbies[lobbyId].merkleRoot, leaf),
-            "Invalid proof"
-        );
-        
-        claimed[lobbyId][player] = true;
-        lobbies[lobbyId].totalClaimed += amount;
-        
-        // Transfer winnings
-        token.safeTransfer(player, amount);
-        
-        emit Claimed(lobbyId, player, amount);
+        emit LobbyFinalized(lobbyId, totalPayout, feeAmount);
     }
 
     /**
