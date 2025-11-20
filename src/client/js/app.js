@@ -126,14 +126,45 @@ async function loadConfig() {
         usdcAddress = config.usdcAddress;
         betLobbyAddress = config.betLobbyAddress;
         console.log('[Config] Loaded:', config);
+        
+        if (!usdcAddress || !betLobbyAddress) {
+            console.warn('[Config] Missing addresses - USDC:', usdcAddress, 'BetLobby:', betLobbyAddress);
+        }
+        
+        return true;
     } catch (error) {
         console.error('[Config] Error loading config:', error);
+        return false;
     }
 }
 
 // Load config on page load
+var configLoaded = false;
 if (typeof window !== 'undefined') {
-    window.addEventListener('load', loadConfig);
+    window.addEventListener('load', async () => {
+        configLoaded = await loadConfig();
+    });
+}
+
+// Ensure config is loaded (with retry)
+async function ensureConfigLoaded() {
+    if (configLoaded && usdcAddress && betLobbyAddress) {
+        return true;
+    }
+    
+    // Try to load config if not loaded
+    if (!configLoaded) {
+        configLoaded = await loadConfig();
+    }
+    
+    // If still not loaded, wait a bit and retry
+    if (!configLoaded || !usdcAddress || !betLobbyAddress) {
+        console.log('[Config] Waiting for config...');
+        await new Promise(resolve => setTimeout(resolve, 500));
+        configLoaded = await loadConfig();
+    }
+    
+    return configLoaded && usdcAddress && betLobbyAddress;
 }
 
 // USDC ABI (minimal)
@@ -188,6 +219,14 @@ function initWalletUI() {
             walletAddress.textContent = address.substring(0, 6) + '...' + address.substring(38);
             walletAddress.style.display = 'block';
             connectBtn.style.display = 'none';
+            
+            // Ensure config is loaded before checking allowance
+            var configReady = await ensureConfigLoaded();
+            if (!configReady) {
+                walletError.textContent = 'Failed to load contract addresses. Please refresh the page.';
+                walletError.style.display = 'block';
+                return;
+            }
             
             // Check USDC allowance
             await checkAllowance();
@@ -293,6 +332,19 @@ function initWalletUI() {
                 }
                 menuConnectBtn.style.display = 'none';
                 
+                // Ensure config is loaded before checking allowance
+                var configReady = await ensureConfigLoaded();
+                if (!configReady) {
+                    if (menuWalletError) {
+                        menuWalletError.textContent = 'Failed to load contract addresses. Please refresh the page.';
+                        menuWalletError.style.display = 'block';
+                    }
+                    menuConnectBtn.disabled = false;
+                    menuConnectBtn.textContent = 'Connect Wallet';
+                    menuConnectBtn.style.display = 'block';
+                    return;
+                }
+                
                 // Check USDC allowance
                 await checkAllowanceMenu();
                 
@@ -397,12 +449,18 @@ function initWalletUI() {
 async function checkAllowance() {
     try {
         if (!window.walletManager || !window.walletManager.isConnected) {
+            console.log('[Wallet] Not connected, skipping allowance check');
             return;
         }
         
         if (!usdcAddress || !betLobbyAddress) {
-            // Try to get from server
-            // For now, assume they're set via global config
+            console.warn('[Wallet] Contract addresses not set. USDC:', usdcAddress, 'BetLobby:', betLobbyAddress);
+            // Show error to user
+            var walletError = document.getElementById('walletError');
+            if (walletError) {
+                walletError.textContent = 'Contract addresses not configured. Please refresh the page.';
+                walletError.style.display = 'block';
+            }
             return;
         }
         
@@ -416,25 +474,43 @@ async function checkAllowance() {
         var approveBtn = document.getElementById('approveUsdcBtn');
         var joinBtn = document.getElementById('joinLobbyBtn');
         
+        console.log('[Wallet] Allowance check:', allowance.toString(), 'Required:', depositAmount);
+        
         if (allowance.lt(depositAmount)) {
-            approveBtn.style.display = 'block';
-            joinBtn.style.display = 'none';
+            console.log('[Wallet] Showing Approve button');
+            if (approveBtn) approveBtn.style.display = 'block';
+            if (joinBtn) joinBtn.style.display = 'none';
         } else {
-            approveBtn.style.display = 'none';
-            joinBtn.style.display = 'block';
+            console.log('[Wallet] Showing Join button');
+            if (approveBtn) approveBtn.style.display = 'none';
+            if (joinBtn) joinBtn.style.display = 'block';
         }
     } catch (error) {
         console.error('[Wallet] Error checking allowance:', error);
+        // Show error to user
+        var walletError = document.getElementById('walletError');
+        if (walletError) {
+            walletError.textContent = 'Error checking allowance: ' + error.message;
+            walletError.style.display = 'block';
+        }
     }
 }
 
 async function checkAllowanceMenu() {
     try {
         if (!window.walletManager || !window.walletManager.isConnected) {
+            console.log('[Wallet] Not connected, skipping allowance check');
             return;
         }
         
         if (!usdcAddress || !betLobbyAddress) {
+            console.warn('[Wallet] Contract addresses not set. USDC:', usdcAddress, 'BetLobby:', betLobbyAddress);
+            // Show error to user
+            var menuWalletError = document.getElementById('menuWalletError');
+            if (menuWalletError) {
+                menuWalletError.textContent = 'Contract addresses not configured. Please refresh the page.';
+                menuWalletError.style.display = 'block';
+            }
             return;
         }
         
@@ -448,15 +524,25 @@ async function checkAllowanceMenu() {
         var menuApproveBtn = document.getElementById('menuApproveBtn');
         var menuJoinBtn = document.getElementById('menuJoinBtn');
         
+        console.log('[Wallet] Allowance check:', allowance.toString(), 'Required:', depositAmount);
+        
         if (allowance.lt(depositAmount)) {
+            console.log('[Wallet] Showing Approve button');
             if (menuApproveBtn) menuApproveBtn.style.display = 'block';
             if (menuJoinBtn) menuJoinBtn.style.display = 'none';
         } else {
+            console.log('[Wallet] Showing Join button');
             if (menuApproveBtn) menuApproveBtn.style.display = 'none';
             if (menuJoinBtn) menuJoinBtn.style.display = 'block';
         }
     } catch (error) {
         console.error('[Wallet] Error checking allowance (menu):', error);
+        // Show error to user
+        var menuWalletError = document.getElementById('menuWalletError');
+        if (menuWalletError) {
+            menuWalletError.textContent = 'Error checking allowance: ' + error.message;
+            menuWalletError.style.display = 'block';
+        }
     }
 }
 

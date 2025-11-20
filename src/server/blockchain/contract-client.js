@@ -18,7 +18,7 @@ class ContractClient {
             throw new Error('Blockchain configuration missing. Set RPC_URL and OPERATOR_PRIVATE_KEY in .env');
         }
 
-        this.provider = new ethers.JsonRpcProvider(config.blockchain.rpcUrl);
+        this.provider = new ethers.providers.JsonRpcProvider(config.blockchain.rpcUrl);
         this.wallet = new ethers.Wallet(config.blockchain.operatorPrivateKey, this.provider);
         
         if (!config.blockchain.betLobbyAddress) {

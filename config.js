@@ -1,3 +1,6 @@
+// Load environment variables from .env file
+require('dotenv').config();
+
 module.exports = {
     host: "0.0.0.0",
     port: 3000,

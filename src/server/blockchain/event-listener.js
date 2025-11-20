@@ -25,7 +25,7 @@ class EventListener {
             return;
         }
 
-        this.provider = new ethers.JsonRpcProvider(config.blockchain.rpcUrl);
+        this.provider = new ethers.providers.JsonRpcProvider(config.blockchain.rpcUrl);
         this.contract = new ethers.Contract(
             config.blockchain.betLobbyAddress,
             BET_LOBBY_ABI,
