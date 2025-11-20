@@ -423,9 +423,10 @@ class LobbyManager {
 
         for (const [socketId, playerState] of lobby.players.entries()) {
             // 1. Notify Client Game is Over
-            if (io && io.sockets.sockets.get(socketId)) {
-                io.to(socketId).emit('kick', 'Lobby Ended! Distributing Rewards...');
-                io.to(socketId).disconnect(true);
+            const socket = io && io.sockets.sockets.get(socketId);
+            if (socket) {
+                socket.emit('kick', 'Lobby Ended! Distributing Rewards...');
+                socket.disconnect(true);
             }
 
             // 2. Remove from internal maps (Logic handled by disconnect handler usually, 
