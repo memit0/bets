@@ -33,5 +33,19 @@ module.exports = {
     minMassLoss: 50,
     sqlinfo: {
       fileName: "db.sqlite3",
+    },
+    blockchain: {
+        // Base Sepolia testnet defaults
+        rpcUrl: process.env.RPC_URL || "https://sepolia.base.org",
+        chainId: process.env.CHAIN_ID || 84532,
+        usdcAddress: process.env.USDC_ADDRESS || "", // Must be set in .env
+        betLobbyAddress: process.env.BET_LOBBY_ADDRESS || "", // Must be set after deployment
+        operatorPrivateKey: process.env.OPERATOR_PRIVATE_KEY || "", // Must be set in .env
+        feeRecipient: process.env.FEE_RECIPIENT || "", // Must be set in .env
+        feeBps: 500, // 5%
+        lobbyDuration: 300, // 5 minutes in seconds
+        finalizeDeadline: 600, // 10 minutes after end
+        cashOutGraceSeconds: 45, // Grace period before cash-out allowed
+        depositAmount: 1000000 // 1 USDC (6 decimals)
     }
 };

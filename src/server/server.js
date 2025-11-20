@@ -14,6 +14,10 @@ const config = require('../../config');
 const util = require('./lib/util');
 const mapUtils = require('./map/map');
 const {getPosition} = require("./lib/entityUtils");
+const LobbyManager = require('./lobby-manager');
+const EventListener = require('./blockchain/event-listener');
+const FinalizationJob = require('./finalization-job');
+const lobbiesRouter = require('./routes/lobbies');
 
 let map = new mapUtils.Map(config);
 
@@ -24,9 +28,42 @@ const INIT_MASS_LOG = util.mathLog(config.defaultPlayerMass, config.slowBase);
 let leaderboard = [];
 let leaderboardChanged = false;
 
+// Track disconnecting players for grace period (network issues vs intentional exit)
+const disconnectingPlayers = new Map(); // socketId -> {timestamp, address, lobbyId, reason}
+const RECONNECT_GRACE_PERIOD = 30000; // 30 seconds grace period for reconnection
+
 const Vector = SAT.Vector;
 
 app.use(express.static(__dirname + '/../client'));
+app.use(express.json());
+app.use('/lobbies', lobbiesRouter);
+
+// Serve blockchain config to client
+app.get('/api/config', (req, res) => {
+    res.json({
+        usdcAddress: config.blockchain.usdcAddress,
+        betLobbyAddress: config.blockchain.betLobbyAddress,
+        chainId: config.blockchain.chainId
+    });
+});
+
+// Initialize blockchain components
+const lobbyManager = new LobbyManager();
+const eventListener = new EventListener();
+const finalizationJob = new FinalizationJob(lobbyManager, io);
+
+// Start event listener and finalization job
+if (eventListener.contract) {
+    eventListener.start();
+    // Cleanup old deposits every hour
+    setInterval(() => eventListener.cleanup(), 60 * 60 * 1000);
+}
+
+if (finalizationJob.contractClient) {
+    finalizationJob.start();
+    // Cleanup old lobbies every hour
+    setInterval(() => lobbyManager.cleanupOldLobbies(), 60 * 60 * 1000);
+}
 
 io.on('connection', function (socket) {
     let type = socket.handshake.query.type;
@@ -77,6 +114,80 @@ const addPlayer = (socket) => {
 
     });
 
+    // Blockchain deposit confirmation
+    socket.on('playerDepositConfirmed', async function (data) {
+        try {
+            const { address, txHash, lobbyId } = data;
+            
+            if (!address || !txHash) {
+                socket.emit('serverMSG', 'Invalid deposit data');
+                return;
+            }
+
+            // Verify deposit via event listener
+            const verified = eventListener.hasDeposited(address, lobbyId) || 
+                            await eventListener.verifyDeposit(address, lobbyId);
+
+            if (!verified) {
+                socket.emit('serverMSG', 'Deposit not verified. Please wait for confirmation.');
+                return;
+            }
+
+            // Get or create lobby
+            const currentLobbyId = lobbyId || lobbyManager.getCurrentLobbyId();
+            const lobby = lobbyManager.getLobby(currentLobbyId);
+
+            // Activate lobby if first deposit
+            lobbyManager.activateLobby(currentLobbyId);
+
+            // Check if player is reconnecting (was temporarily disconnected)
+            const reconnected = lobbyManager.handleReconnection(socket.id, address, currentLobbyId);
+            
+            if (!reconnected) {
+                // New player or not reconnecting - add normally
+                lobbyManager.addPlayer(currentLobbyId, socket.id, address, txHash);
+            } else {
+                console.log(`[Blockchain] Player ${address} reconnected to lobby ${currentLobbyId}`);
+            }
+
+            // Set player blockchain data
+            currentPlayer.setBlockchainData(address, txHash, config.blockchain.depositAmount);
+
+            // Send lobby end time
+            const endTime = lobbyManager.getLobbyEndTime(currentLobbyId);
+            if (endTime) {
+                socket.emit('lobbyEndTime', { endTime });
+                // Broadcast to all players in lobby
+                lobby.players.forEach((playerState, playerSocketId) => {
+                    if (sockets[playerSocketId]) {
+                        sockets[playerSocketId].emit('lobbyEndTime', { endTime });
+                    }
+                });
+            }
+
+            socket.emit('serverMSG', 'Deposit confirmed! Welcome to the lobby.');
+            console.log(`[Blockchain] Player ${address} confirmed deposit for lobby ${currentLobbyId}`);
+        } catch (error) {
+            console.error('[Blockchain] Error handling deposit confirmation:', error);
+            socket.emit('serverMSG', 'Error verifying deposit: ' + error.message);
+        }
+    });
+
+    // Cash out intent
+    socket.on('cashOutIntent', function () {
+        const success = lobbyManager.handleCashOut(socket.id);
+        if (success) {
+            socket.emit('serverMSG', 'Cash-out request processed. Your balance is frozen.');
+            // Update balance display
+            const player = lobbyManager.getPlayer(socket.id);
+            if (player) {
+                socket.emit('playerBalance', { balance: player.balance });
+            }
+        } else {
+            socket.emit('serverMSG', 'Cash-out failed. Make sure grace period has elapsed and you are alive.');
+        }
+    });
+
     socket.on('pingcheck', () => {
         socket.emit('pongcheck');
     });
@@ -95,8 +206,69 @@ const addPlayer = (socket) => {
         console.log('[INFO] User ' + currentPlayer.name + ' has respawned');
     });
 
+    // Track disconnecting state (fired before disconnect)
+    socket.on('disconnecting', (reason) => {
+        const lobbyPlayer = lobbyManager.getPlayer(socket.id);
+        if (lobbyPlayer && lobbyPlayer.status === 'active') {
+            disconnectingPlayers.set(socket.id, {
+                timestamp: Date.now(),
+                address: lobbyPlayer.address,
+                lobbyId: lobbyManager.playerLobbies.get(socket.id),
+                reason: reason
+            });
+            console.log(`[INFO] Player ${currentPlayer.name} disconnecting (reason: ${reason})`);
+        }
+    });
+
     socket.on('disconnect', () => {
         map.players.removePlayerByID(currentPlayer.id);
+        
+        const disconnectInfo = disconnectingPlayers.get(socket.id);
+        
+        // Check if player reconnected (new socket with same address)
+        // This is handled in playerDepositConfirmed if they reconnect
+        
+        if (disconnectInfo) {
+            // Determine if it's a network issue (heartbeat timeout) vs intentional exit
+            const isNetworkIssue = disconnectInfo.reason === 'transport close' || 
+                                  disconnectInfo.reason === 'ping timeout' ||
+                                  disconnectInfo.reason === 'transport error';
+            
+            if (isNetworkIssue) {
+                // Network issue - give grace period for reconnection
+                console.log(`[INFO] Network disconnect detected for ${currentPlayer.name}, grace period: ${RECONNECT_GRACE_PERIOD}ms`);
+                
+                // Mark as temporarily disconnected (preserve balance)
+                lobbyManager.markTemporarilyDisconnected(socket.id);
+                
+                // Set timeout to check if player reconnected
+                setTimeout(() => {
+                    // Check if player reconnected (by checking if address is still in lobby with active status)
+                    const lobby = lobbyManager.getLobby(disconnectInfo.lobbyId);
+                    const playerByAddress = lobbyManager.getPlayerByAddress(disconnectInfo.address);
+                    
+                    if (!playerByAddress || playerByAddress.status === 'temporarily_disconnected') {
+                        // Still disconnected after grace period - mark as dead
+                        console.log(`[INFO] Player ${disconnectInfo.address} did not reconnect, marking as dead`);
+                        lobbyManager.removePlayerPermanently(disconnectInfo.address, disconnectInfo.lobbyId);
+                    } else {
+                        console.log(`[INFO] Player ${disconnectInfo.address} reconnected successfully`);
+                    }
+                }, RECONNECT_GRACE_PERIOD);
+            } else {
+                // Intentional disconnect (tab close, etc.) - immediate death
+                console.log(`[INFO] Intentional disconnect for ${currentPlayer.name}, immediate death`);
+                lobbyManager.removePlayer(socket.id, null, disconnectInfo.lobbyId);
+            }
+            
+            disconnectingPlayers.delete(socket.id);
+        } else {
+            // No disconnect info (shouldn't happen, but fallback)
+            // Try to get lobby ID first
+            const lobbyId = lobbyManager.playerLobbies.get(socket.id);
+            lobbyManager.removePlayer(socket.id, null, lobbyId);
+        }
+        
         console.log('[INFO] User ' + currentPlayer.name + ' has disconnected');
         socket.broadcast.emit('playerDisconnect', { name: currentPlayer.name });
     });
@@ -212,9 +384,12 @@ const addSpectator = (socket) => {
 }
 
 const tickPlayer = (currentPlayer) => {
-    if (currentPlayer.lastHeartbeat < new Date().getTime() - config.maxHeartbeatInterval) {
-        sockets[currentPlayer.id].emit('kick', 'Last heartbeat received over ' + config.maxHeartbeatInterval + ' ago.');
-        sockets[currentPlayer.id].disconnect();
+    const heartbeatTimeout = new Date().getTime() - config.maxHeartbeatInterval;
+    if (currentPlayer.lastHeartbeat < heartbeatTimeout) {
+        // Heartbeat timeout - this will trigger disconnect with 'ping timeout' reason
+        // The disconnect handler will check if it's network issue and apply grace period
+        sockets[currentPlayer.id].emit('kick', 'Connection timeout. Reconnecting...');
+        sockets[currentPlayer.id].disconnect(true); // Force disconnect
     }
 
     currentPlayer.move(config.slowBase, config.gameWidth, config.gameHeight, INIT_MASS_LOG);
@@ -275,6 +450,23 @@ const tickGame = () => {
         const playerDied = map.players.removeCell(gotEaten.playerIndex, gotEaten.cellIndex);
         if (playerDied) {
             let playerGotEaten = map.players.data[gotEaten.playerIndex];
+            let playerEater = map.players.data[eater.playerIndex];
+            
+            // Update balances in lobby manager
+            lobbyManager.handleKill(playerEater.id, playerGotEaten.id);
+            
+            // Update player balance fields
+            const lobbyPlayerEater = lobbyManager.getPlayer(playerEater.id);
+            const lobbyPlayerVictim = lobbyManager.getPlayer(playerGotEaten.id);
+            
+            if (lobbyPlayerEater && lobbyPlayerVictim) {
+                playerEater.balance = lobbyPlayerEater.balance;
+                playerGotEaten.balance = 0;
+                
+                // Send balance update to killer
+                sockets[playerEater.id].emit('playerBalance', { balance: lobbyPlayerEater.balance });
+            }
+            
             io.emit('playerDied', { name: playerGotEaten.name }); //TODO: on client it is `playerEatenName` instead of `name`
             sockets[playerGotEaten.id].emit('RIP');
             map.players.removePlayerByIndex(gotEaten.playerIndex);
@@ -315,6 +507,12 @@ const sendUpdates = () => {
         sockets[playerData.id].emit('serverTellPlayerMove', playerData, visiblePlayers, visibleFood, visibleMass, visibleViruses);
         if (leaderboardChanged) {
             sendLeaderboard(sockets[playerData.id]);
+        }
+        
+        // Send balance update if player is in a lobby
+        const lobbyPlayer = lobbyManager.getPlayer(playerData.id);
+        if (lobbyPlayer && lobbyPlayer.balance !== undefined) {
+            sockets[playerData.id].emit('playerBalance', { balance: lobbyPlayer.balance });
         }
     });
 

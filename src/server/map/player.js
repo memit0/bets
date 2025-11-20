@@ -91,6 +91,9 @@ exports.Player = class {
         this.screenWidth = null;
         this.screenHeight = null;
         this.timeToMerge = null;
+        this.address = null; // Ethereum address
+        this.depositTx = null; // Deposit transaction hash
+        this.balance = null; // USDC balance (in 6 decimals, starts at 1e6)
         this.setLastHeartbeat();
     }
 
@@ -111,6 +114,12 @@ exports.Player = class {
         this.screenWidth = playerData.screenWidth;
         this.screenHeight = playerData.screenHeight;
         this.setLastHeartbeat();
+    }
+
+    setBlockchainData(address, depositTx, initialBalance) {
+        this.address = address;
+        this.depositTx = depositTx;
+        this.balance = initialBalance || null;
     }
 
     setLastHeartbeat() {

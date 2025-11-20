@@ -14,6 +14,19 @@
 <body>
     <div id="gameAreaWrapper">
         <div id="status"><span class="title">Leaderboard</span></div>
+        <div id="walletPanel" class="wallet-panel">
+            <div id="walletStatus">Not connected</div>
+            <button id="connectWalletBtn" style="display: none;">Connect Wallet</button>
+            <div id="walletAddress" style="display: none;"></div>
+            <button id="approveUsdcBtn" style="display: none;">Approve 1 USDC</button>
+            <button id="joinLobbyBtn" style="display: none;">Join Lobby (1 USDC)</button>
+            <div id="walletError" class="wallet-error" style="display: none;"></div>
+        </div>
+        <div id="gameHUD" class="game-hud" style="display: none;">
+            <div id="lobbyTimer">Time: --:--</div>
+            <div id="playerBalance">Balance: 0 USDC</div>
+            <button id="cashOutBtn" disabled>Cash Out</button>
+        </div>
         <div class="chatbox" id="chatbox">
             <ul id="chatList" class="chat-list"></ul>
             <input id="chatInput" type="text" class="chat-input" placeholder="Chat here..." maxlength="35" />
@@ -23,6 +36,16 @@
            <input type="image" id="feed" class="feed" src="img/feed.png" alt="feedBtn">
         </div>
         <canvas tabindex="1" id="cvs"></canvas>
+    </div>
+    <!-- Results Modal -->
+    <div id="resultsModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <h2>Lobby Ended</h2>
+            <div id="finalBalance">Final Balance: 0 USDC</div>
+            <button id="claimBtn">Claim Winnings</button>
+            <div id="claimStatus"></div>
+            <button id="closeResultsBtn">Close</button>
+        </div>
     </div>
     <div id="startMenuWrapper">
         <div id="startMenu">
@@ -59,6 +82,8 @@
     </div>
     <!-- JS -->
     <script src="//code.jquery.com/jquery-2.2.0.min.js"></script>
+    <script src="https://cdn.ethers.io/lib/ethers-5.7.2.umd.min.js"></script>
+    <script src="js/wallet.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>
