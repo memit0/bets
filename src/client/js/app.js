@@ -379,8 +379,14 @@ function initWalletUI() {
                 var tx = await usdcContract.approve(betLobbyAddress, depositAmount);
                 await tx.wait();
                 
-                menuApproveBtn.textContent = 'Approved ✓';
-                await checkAllowanceMenu();
+                // Hide approve button and show join button
+                menuApproveBtn.style.display = 'none';
+                if (menuJoinBtn) {
+                    menuJoinBtn.style.display = 'block';
+                    menuJoinBtn.disabled = false;
+                }
+                
+                console.log('[Wallet] Approval successful, showing Join button');
             } catch (error) {
                 if (menuWalletError) {
                     menuWalletError.textContent = error.message;
