@@ -14,9 +14,13 @@ A simple but powerful Agar.IO clone built with socket.IO and HTML5 canvas on top
 ![Image](screenshot.png)
 
 ## Live Demos
+The game is now **deployed and live**! 
+
 An updated live list of demos can be found on the [Live Demos wiki page](https://github.com/owenashurst/agar.io-clone/wiki/Live-Demos).
 
 This is the most up to date version from master. Any merged pull requests will deploy to this URL automatically.
+
+**Note:** The game now requires a Web3 wallet (MetaMask recommended) and USDC tokens on Base Sepolia testnet to play. See the [How to Join](#how-to-join-the-game) section below for complete instructions.
 
 ---
 
@@ -37,7 +41,109 @@ You can check out how to play on our [wiki](https://github.com/owenashurst/agar.
 
 ---
 
+## How to Join the Game
+
+The game is now deployed and ready to play! To join, you'll need to connect your wallet, get USDC tokens, and deposit to enter a lobby.
+
+### Prerequisites
+
+1. **Install a Web3 Wallet**
+   - Install [MetaMask](https://metamask.io/) or another Web3-compatible wallet browser extension
+   - Create a new wallet or import an existing one
+
+2. **Get Base Sepolia Testnet Tokens**
+
+   **Get Base Sepolia ETH (for gas fees):**
+   - Visit the [Base Sepolia Faucet](https://www.coinbase.com/faucets/base-ethereum-goerli-faucet)
+   - Connect your wallet and request testnet ETH (you'll need ~0.1 ETH for gas)
+
+   **Get Base Sepolia USDC (for game deposit):**
+   - **Option 1:** Bridge USDC from Ethereum Sepolia using the [Base Bridge](https://bridge.base.org/)
+   - **Option 2:** Request Mock USDC from the deployer (for testing):
+     
+     A Mock USDC contract is deployed at `0x301C23eC2162EBc8D8Ff8d47ED9883DDF31f6C72` on Base Sepolia testnet.
+     
+     **Note:** The MockUSDC contract does not have a public mint function, so you cannot mint tokens yourself. You'll need to:
+     - Contact the game administrator to receive test USDC tokens, OR
+     - Bridge real USDC from Ethereum Sepolia using Option 1 above
+
+### For Administrators: Sending Mock USDC to Users
+
+If you're the deployer and need to send MockUSDC tokens to new users, you have several options:
+
+**Option 1: Using the send script (Recommended)**
+```bash
+# Send 10 USDC to a user
+node scripts/send-mock-usdc.js 0xUSER_ADDRESS 10
+
+# Make sure DEPLOYER_PRIVATE_KEY is set in .env (or it will use OPERATOR_PRIVATE_KEY)
+```
+
+**Option 2: Using Hardhat console**
+```bash
+npx hardhat console --network baseSepolia
+const MockUSDC = await ethers.getContractFactory("MockUSDC");
+const usdc = MockUSDC.attach("0x301C23eC2162EBc8D8Ff8d47ED9883DDF31f6C72");
+const [deployer] = await ethers.getSigners();
+await usdc.connect(deployer).transfer("USER_ADDRESS", ethers.parseUnits("10", 6)); // Send 10 USDC
+```
+
+**Option 3: Using MetaMask or block explorer**
+- Import the MockUSDC contract ABI
+- Use the `transfer(address to, uint256 amount)` function
+- Connect with the deployer wallet
+
+### Joining Steps
+
+1. **Access the Game**
+   - Navigate to the deployed game URL (the game is live and ready to play)
+
+2. **Connect Your Wallet**
+   - Click the "Connect Wallet" button in the game interface
+   - Approve the connection request in your wallet
+   - The game will automatically switch your wallet to Base Sepolia testnet if needed
+
+3. **Approve USDC Spending**
+   - After connecting, you'll see an "Approve 1 USDC" button
+   - Click it to approve the game contract to spend 1 USDC from your wallet
+   - Confirm the transaction in your wallet and wait for confirmation
+
+4. **Join a Lobby**
+   - Once approved, click "Join Lobby (1 USDC)" 
+   - This deposits 1 USDC into the game contract to enter the current lobby
+   - Confirm the transaction in your wallet
+   - Wait for the deposit confirmation (you'll see a success message)
+
+5. **Start Playing**
+   - Enter your nickname in the input field
+   - Click "Play" to start the game
+   - The game will begin and you can start eating food and other players!
+
+### Game Economics
+
+- **Entry Fee:** 1 USDC per lobby
+- **Lobby Duration:** 5 minutes
+- **Balance System:** Your balance increases when you eliminate other players
+- **Cash Out:** You can cash out mid-game (after grace period) to freeze your balance
+- **Payouts:** All winnings are distributed at the end of each lobby
+- **Fees:** 5% operations fee is deducted from final balances
+
+### Troubleshooting
+
+- **"No wallet detected"** → Install MetaMask or another Web3 wallet
+- **"Insufficient funds"** → Get Base Sepolia ETH from the faucet for gas fees
+- **"Insufficient USDC"** → Mint or bridge USDC tokens to your wallet
+- **"Wrong network"** → The game will prompt you to switch to Base Sepolia automatically
+- **"Contract address not configured"** → Refresh the page or contact support
+
+---
+
 ## Latest Changes
+- **Blockchain Integration:** Game now uses USDC deposits on Base Sepolia testnet
+- **Wallet Connection:** Players must connect their Web3 wallet to play
+- **Lobby System:** Players deposit 1 USDC to join time-limited lobbies (5 minutes)
+- **Balance Tracking:** Real-time balance updates based on player eliminations
+- **Cash Out Feature:** Players can cash out mid-game to freeze their balance
 - Game logic is handled by the server
 - The client side is for rendering of the canvas and its items only.
 - Mobile optimisation.
