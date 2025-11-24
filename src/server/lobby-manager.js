@@ -421,12 +421,26 @@ class LobbyManager {
         const lobby = this.getLobby(lobbyId);
         if (!lobby || !lobby.players) return;
 
+        // Calculate final balances for display
+        const finalBalances = this.getFinalBalances(lobbyId);
+        const balanceMap = new Map(finalBalances.map(b => [b.address.toLowerCase(), b.amount]));
+
         for (const [socketId, playerState] of lobby.players.entries()) {
             // 1. Notify Client Game is Over
             const socket = io && io.sockets.sockets.get(socketId);
             if (socket) {
-                socket.emit('kick', 'Lobby Ended! Distributing Rewards...');
-                socket.disconnect(true);
+                // Get player's final balance
+                const balance = balanceMap.get(playerState.address.toLowerCase()) || 0;
+                
+                // Send lobbyEnded event instead of kick/disconnect
+                socket.emit('lobbyEnded', {
+                    reason: 'Lobby Ended! Distributing Rewards...',
+                    balance: balance,
+                    isWinner: balance > 0
+                });
+                
+                // We DO NOT disconnect here anymore. 
+                // We let the client see the results modal.
             }
 
             // 2. Remove from internal maps (Logic handled by disconnect handler usually, 
