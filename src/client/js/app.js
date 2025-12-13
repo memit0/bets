@@ -181,13 +181,6 @@ var BET_LOBBY_ABI = [
 ];
 
 function initWalletUI() {
-    var connectBtn = document.getElementById('connectWalletBtn');
-    var approveBtn = document.getElementById('approveUsdcBtn');
-    var joinBtn = document.getElementById('joinLobbyBtn');
-    var walletStatus = document.getElementById('walletStatus');
-    var walletAddress = document.getElementById('walletAddress');
-    var walletError = document.getElementById('walletError');
-
     // Start menu wallet buttons
     var menuConnectBtn = document.getElementById('menuConnectBtn');
     var menuApproveBtn = document.getElementById('menuApproveBtn');
@@ -198,119 +191,9 @@ function initWalletUI() {
 
     // Check if wallet is available
     if (!window.walletManager || !window.walletManager.isWalletAvailable()) {
-        if (walletStatus) walletStatus.textContent = 'No wallet detected';
         if (menuWalletStatus) menuWalletStatus.textContent = 'No wallet detected';
         return;
     }
-
-    connectBtn.style.display = 'block';
-    connectBtn.onclick = async function() {
-        try {
-            walletError.style.display = 'none';
-            
-            var address = await window.walletManager.connectWallet();
-            
-            // Switch to Base Sepolia
-            if (!window.walletManager.isOnCorrectNetwork()) {
-                await window.walletManager.switchToBaseSepolia();
-            }
-
-            walletStatus.textContent = 'Connected';
-            walletAddress.textContent = address.substring(0, 6) + '...' + address.substring(38);
-            walletAddress.style.display = 'block';
-            connectBtn.style.display = 'none';
-            
-            // Ensure config is loaded before checking allowance
-            var configReady = await ensureConfigLoaded();
-            if (!configReady) {
-                walletError.textContent = 'Failed to load contract addresses. Please refresh the page.';
-                walletError.style.display = 'block';
-                return;
-            }
-            
-            // Check USDC allowance
-            await checkAllowance();
-            
-            // Check if already deposited
-            await checkDepositStatus();
-        } catch (error) {
-            walletError.textContent = error.message;
-            walletError.style.display = 'block';
-        }
-    };
-
-    approveBtn.onclick = async function() {
-        try {
-            walletError.style.display = 'none';
-            approveBtn.disabled = true;
-            approveBtn.textContent = 'Approving...';
-            
-            // Get USDC contract (address should be set from server config)
-            if (!usdcAddress) {
-                throw new Error('USDC address not configured');
-            }
-            
-            var provider = window.walletManager.getProvider();
-            var signer = await window.walletManager.getSigner();
-            var usdcContract = new ethers.Contract(usdcAddress, USDC_ABI, signer);
-            
-            // Approve 1 USDC
-            var tx = await usdcContract.approve(betLobbyAddress, depositAmount);
-            await tx.wait();
-            
-            approveBtn.textContent = 'Approved';
-            await checkAllowance();
-        } catch (error) {
-            walletError.textContent = error.message;
-            walletError.style.display = 'block';
-            approveBtn.disabled = false;
-            approveBtn.textContent = 'Approve 1 USDC';
-        }
-    };
-
-    joinBtn.onclick = async function() {
-        try {
-            walletError.style.display = 'none';
-            joinBtn.disabled = true;
-            joinBtn.textContent = 'Joining...';
-            
-            if (!betLobbyAddress) {
-                throw new Error('BetLobby address not configured');
-            }
-            
-            // Get current lobby ID (deterministic)
-            var lobbyDurationMs = 300000; // 5 minutes
-            currentLobbyId = Math.floor(Date.now() / lobbyDurationMs);
-            
-            var signer = await window.walletManager.getSigner();
-            var betLobbyContract = new ethers.Contract(betLobbyAddress, BET_LOBBY_ABI, signer);
-            
-            // Join lobby
-            var tx = await betLobbyContract.joinLobby(currentLobbyId);
-            var receipt = await tx.wait();
-            
-            joinBtn.textContent = 'Joined!';
-            walletStatus.textContent = 'Deposit confirmed';
-            global.depositConfirmed = true; // Enable play button
-            global.depositAddress = await signer.getAddress();
-            global.depositTxHash = receipt.transactionHash;
-            global.depositLobbyId = currentLobbyId;
-            
-            // Emit to server
-            if (socket) {
-                socket.emit('playerDepositConfirmed', {
-                    address: await signer.getAddress(),
-                    txHash: receipt.transactionHash,
-                    lobbyId: currentLobbyId
-                });
-            }
-        } catch (error) {
-            walletError.textContent = error.message;
-            walletError.style.display = 'block';
-            joinBtn.disabled = false;
-            joinBtn.textContent = 'Join Lobby (1 USDC)';
-        }
-    };
 
     // START MENU WALLET BUTTONS
     if (menuConnectBtn) {
@@ -449,56 +332,6 @@ function initWalletUI() {
                 menuJoinBtn.textContent = 'Join Lobby (1 USDC)';
             }
         };
-    }
-}
-
-async function checkAllowance() {
-    try {
-        if (!window.walletManager || !window.walletManager.isConnected) {
-            console.log('[Wallet] Not connected, skipping allowance check');
-            return;
-        }
-        
-        if (!usdcAddress || !betLobbyAddress) {
-            console.warn('[Wallet] Contract addresses not set. USDC:', usdcAddress, 'BetLobby:', betLobbyAddress);
-            // Show error to user
-            var walletError = document.getElementById('walletError');
-            if (walletError) {
-                walletError.textContent = 'Contract addresses not configured. Please refresh the page.';
-                walletError.style.display = 'block';
-            }
-            return;
-        }
-        
-        var provider = window.walletManager.getProvider();
-        var signer = await window.walletManager.getSigner();
-        var address = await signer.getAddress();
-        var usdcContract = new ethers.Contract(usdcAddress, USDC_ABI, provider);
-        
-        var allowance = await usdcContract.allowance(address, betLobbyAddress);
-        
-        var approveBtn = document.getElementById('approveUsdcBtn');
-        var joinBtn = document.getElementById('joinLobbyBtn');
-        
-        console.log('[Wallet] Allowance check:', allowance.toString(), 'Required:', depositAmount);
-        
-        if (allowance.lt(depositAmount)) {
-            console.log('[Wallet] Showing Approve button');
-            if (approveBtn) approveBtn.style.display = 'block';
-            if (joinBtn) joinBtn.style.display = 'none';
-        } else {
-            console.log('[Wallet] Showing Join button');
-            if (approveBtn) approveBtn.style.display = 'none';
-            if (joinBtn) joinBtn.style.display = 'block';
-        }
-    } catch (error) {
-        console.error('[Wallet] Error checking allowance:', error);
-        // Show error to user
-        var walletError = document.getElementById('walletError');
-        if (walletError) {
-            walletError.textContent = 'Error checking allowance: ' + error.message;
-            walletError.style.display = 'block';
-        }
     }
 }
 
@@ -698,6 +531,8 @@ function setupSocket(socket) {
         var gameHUD = document.getElementById('gameHUD');
         if (gameHUD && window.walletManager && window.walletManager.isConnected) {
             gameHUD.style.display = 'block';
+            updateBalanceDisplay(); // Update immediately if we have data
+            updateLobbyTimer(); // Update immediately if we have data
         }
     });
 
@@ -791,13 +626,25 @@ function setupSocket(socket) {
     });
 
     // Lobby events
+    socket.on('lobbyEnded', function (data) {
+        global.gameStart = false;
+        // Prevent "Disconnected" message from showing up
+        global.kicked = true; 
+        
+        // Show results modal with the data from server
+        showResultsModal(data);
+    });
+
     socket.on('lobbyEndTime', function (data) {
+        console.log('[Lobby] Received EndTime:', data.endTime);
         global.lobbyEndTime = data.endTime;
         global.lobbyStartTime = Date.now(); // Track start time for cash-out grace period
         // Start countdown timer
         if (global.lobbyEndTime) {
             updateLobbyTimer();
-            setInterval(updateLobbyTimer, 1000);
+            if (!lobbyTimerInterval) {
+                lobbyTimerInterval = setInterval(updateLobbyTimer, 1000);
+            }
         }
         
         // Enable cash-out button after grace period (45 seconds)
@@ -811,11 +658,15 @@ function setupSocket(socket) {
 
     socket.on('lobbyFinalized', function (data) {
         console.log('[Lobby] Lobby finalized:', data);
-        showResultsModal(data);
+        // We might receive this too, but lobbyEnded is the primary trigger for the player
+        if (document.getElementById('resultsModal').style.display !== 'block') {
+            showResultsModal(data);
+        }
     });
 
     // Player balance updates
     socket.on('playerBalance', function (data) {
+        // console.log('[Lobby] Received Balance:', data.balance);
         global.playerBalance = data.balance;
         updateBalanceDisplay();
     });
@@ -864,13 +715,24 @@ function showResultsModal(data) {
     var claimBtn = document.getElementById('claimBtn');
     var claimStatus = document.getElementById('claimStatus');
     var closeBtn = document.getElementById('closeResultsBtn');
+    var modalTitle = modal.querySelector('h2');
 
     if (finalBalance && data.balance !== undefined) {
         var balanceUsdc = (data.balance / 1000000).toFixed(2);
         finalBalance.textContent = 'Final Balance: ' + balanceUsdc + ' USDC';
     }
 
+    // Update title based on outcome
+    if (modalTitle) {
+        if (data.reason) {
+            modalTitle.textContent = data.reason;
+        } else {
+            modalTitle.textContent = 'Lobby Ended';
+        }
+    }
+
     modal.style.display = 'block';
+    modal.style.display = 'flex'; // Ensure flex for centering
 
     // Hide claim button as distribution is automatic
     if (claimBtn) {
@@ -878,14 +740,48 @@ function showResultsModal(data) {
     }
     
     if (claimStatus) {
-        claimStatus.textContent = 'Rewards have been automatically distributed to your wallet.';
+        claimStatus.textContent = 'Rewards are being automatically distributed to your wallet...';
         if (data.txHash) {
-            claimStatus.textContent += ' Tx: ' + data.txHash.substring(0, 10) + '...';
+            claimStatus.textContent = 'Rewards distributed! Tx: ' + data.txHash.substring(0, 10) + '...';
         }
     }
 
     closeBtn.onclick = function() {
         modal.style.display = 'none';
+        
+        // Reset to start menu
+        document.getElementById('gameAreaWrapper').style.opacity = 0;
+        document.getElementById('startMenuWrapper').style.maxHeight = '1000px';
+        
+        // Enable start button again if needed
+        var startButton = document.getElementById('startButton');
+        if (startButton) {
+            startButton.disabled = false;
+            startButton.textContent = 'Play';
+        }
+        
+        // Clear game loop
+        if (global.animLoopHandle) {
+            window.cancelAnimationFrame(global.animLoopHandle);
+            global.animLoopHandle = undefined;
+        }
+        
+        // Reset connection flags so we can join again
+        global.kicked = false;
+        global.depositConfirmed = false; // Require joining a new lobby
+        
+        // Reset Wallet UI in Start Menu to allow joining new lobby
+        var menuJoinBtn = document.getElementById('menuJoinBtn');
+        var menuWalletStatus = document.getElementById('menuWalletStatus');
+        
+        if (menuJoinBtn) {
+            menuJoinBtn.style.display = 'block';
+            menuJoinBtn.disabled = false;
+            menuJoinBtn.textContent = 'Join Lobby (1 USDC)';
+        }
+        if (menuWalletStatus) {
+            menuWalletStatus.textContent = 'Connected';
+        }
     };
 }
 
